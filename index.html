@@ -1,139 +1,143 @@
 <!doctype html>
 <html lang="ja">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>シティチェイス - City Chase</title>
-    <meta name="description" content="警察vs犯人の非対称対戦ボードゲーム" />
-  </head>
-  <body class="bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 min-h-screen">
-    <div id="app" class="container mx-auto px-4 py-8">
-      <!-- ヘッダー -->
-      <header class="text-center mb-8">
-        <h1 class="text-5xl font-bold text-white mb-2 tracking-wider">
-          🚁 シティチェイス 🚗
-        </h1>
-        <p class="text-blue-200 text-lg">警察vs犯人の頭脳戦</p>
-      </header>
 
-      <!-- ゲーム情報パネル -->
-      <div class="bg-white/10 backdrop-blur-md rounded-2xl p-6 mb-6 shadow-2xl border border-white/20">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-white">
-          <!-- ラウンド表示 -->
-          <div class="text-center p-4 bg-blue-600/30 rounded-xl">
-            <div class="text-sm text-blue-200 mb-1">ラウンド</div>
-            <div class="text-4xl font-bold" id="round-display">1</div>
-            <div class="text-xs text-blue-300 mt-1">/ 11</div>
-          </div>
-          
-          <!-- ターン表示 -->
-          <div class="text-center p-4 bg-purple-600/30 rounded-xl">
-            <div class="text-sm text-purple-200 mb-1">現在のターン</div>
-            <div class="text-2xl font-bold" id="turn-display">犯人</div>
-            <div class="text-xs text-purple-300 mt-1" id="turn-status">移動中...</div>
-          </div>
-          
-          <!-- 発見した痕跡 -->
-          <div class="text-center p-4 bg-green-600/30 rounded-xl">
-            <div class="text-sm text-green-200 mb-1">発見した痕跡</div>
-            <div class="text-4xl font-bold" id="traces-found">0</div>
-            <div class="text-xs text-green-300 mt-1">個</div>
-          </div>
-        </div>
-      </div>
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>シティチェイス - City Chase</title>
+  <meta name="description" content="警察vs犯人の非対称対戦ボードゲーム" />
+</head>
 
-      <!-- メインゲームエリア -->
-      <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <!-- ゲームボード -->
-        <div class="lg:col-span-3">
-          <div class="bg-white/5 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
-            <div id="game-board" class="relative mx-auto" style="width: min(100%, 600px); aspect-ratio: 1;">
-              <!-- グリッドはJavaScriptで生成 -->
-            </div>
-          </div>
+<body class="bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 min-h-screen">
+  <div id="app" class="container mx-auto px-4 py-8">
+    <!-- ヘッダー -->
+    <header class="text-center mb-8">
+      <h1 class="text-5xl font-bold text-white mb-2 tracking-wider">
+        🚁 シティチェイス 🚗
+      </h1>
+      <p class="text-blue-200 text-lg">警察vs犯人の頭脳戦</p>
+    </header>
+
+    <!-- ゲーム情報パネル -->
+    <div class="bg-white/10 backdrop-blur-md rounded-2xl p-6 mb-6 shadow-2xl border border-white/20">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-white">
+        <!-- ラウンド表示 -->
+        <div class="text-center p-4 bg-blue-600/30 rounded-xl">
+          <div class="text-sm text-blue-200 mb-1">ラウンド</div>
+          <div class="text-4xl font-bold" id="round-display">1</div>
+          <div class="text-xs text-blue-300 mt-1">/ 11</div>
         </div>
 
-        <!-- コントロールパネル -->
-        <div class="lg:col-span-1">
-          <div class="bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl border border-white/20 sticky top-4">
-            <h2 class="text-2xl font-bold text-white mb-4">🎮 操作</h2>
-            
-            <!-- ゲーム開始ボタン -->
-            <button id="start-game-btn" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold py-3 px-6 rounded-xl mb-4 hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:scale-105">
-              ゲーム開始
-            </button>
-
-            <!-- プレイヤー選択 -->
-            <div class="mb-6">
-              <label class="block text-white text-sm font-semibold mb-2">プレイモード</label>
-              <select id="game-mode" class="w-full bg-slate-800 text-white rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="human">人間 vs 人間</option>
-                <option value="ai">人間 vs AI</option>
-              </select>
-            </div>
-
-            <!-- 犯人操作パネル -->
-            <div id="criminal-panel" class="mb-6 hidden">
-              <h3 class="text-lg font-bold text-red-400 mb-3">🚗 犯人の操作</h3>
-              <div class="space-y-2">
-                <button class="action-btn w-full bg-red-600/80 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-all" data-dir="up">↑ 上に移動</button>
-                <div class="grid grid-cols-2 gap-2">
-                  <button class="action-btn bg-red-600/80 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-all" data-dir="left">← 左</button>
-                  <button class="action-btn bg-red-600/80 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-all" data-dir="right">右 →</button>
-                </div>
-                <button class="action-btn w-full bg-red-600/80 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-all" data-dir="down">↓ 下に移動</button>
-              </div>
-            </div>
-
-            <!-- 警察操作パネル -->
-            <div id="police-panel" class="mb-6 hidden">
-              <h3 class="text-lg font-bold text-blue-400 mb-3">🚁 警察の操作</h3>
-              <div class="mb-3">
-                <label class="block text-white text-sm mb-2">ヘリコプター選択</label>
-                <select id="helicopter-select" class="w-full bg-slate-800 text-white rounded-lg px-4 py-2 border border-white/20">
-                  <option value="0">ヘリ 1</option>
-                  <option value="1">ヘリ 2</option>
-                  <option value="2">ヘリ 3</option>
-                </select>
-              </div>
-              <div class="space-y-2">
-                <button id="move-mode-btn" class="w-full bg-blue-600/80 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-all">
-                  移動モード
-                </button>
-                <button id="search-mode-btn" class="w-full bg-purple-600/80 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded-lg transition-all">
-                  調査モード
-                </button>
-              </div>
-            </div>
-
-            <!-- ターン終了ボタン -->
-            <button id="end-turn-btn" class="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white font-bold py-3 px-6 rounded-xl hover:from-orange-600 hover:to-red-700 transition-all shadow-lg hidden">
-              ターン終了
-            </button>
-
-            <!-- ゲームログ -->
-            <div class="mt-6">
-              <h3 class="text-lg font-bold text-white mb-2">📋 ログ</h3>
-              <div id="game-log" class="bg-slate-900/50 rounded-lg p-3 h-48 overflow-y-auto text-sm text-white space-y-1">
-                <div class="text-gray-400">ゲームを開始してください</div>
-              </div>
-            </div>
-          </div>
+        <!-- ターン表示 -->
+        <div class="text-center p-4 bg-purple-600/30 rounded-xl">
+          <div class="text-sm text-purple-200 mb-1">現在のターン</div>
+          <div class="text-2xl font-bold" id="turn-display">犯人</div>
+          <div class="text-xs text-purple-300 mt-1" id="turn-status">移動中...</div>
         </div>
-      </div>
 
-      <!-- ゲーム終了モーダル -->
-      <div id="game-over-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden items-center justify-center z-50">
-        <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-8 max-w-md mx-4 shadow-2xl border-2 border-white/20">
-          <h2 class="text-4xl font-bold text-white mb-4 text-center" id="winner-text">警察の勝利!</h2>
-          <p class="text-xl text-gray-300 mb-6 text-center" id="game-over-message">犯人を逮捕しました!</p>
-          <button id="restart-btn" class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold py-3 px-6 rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg">
-            もう一度プレイ
-          </button>
+        <!-- 発見した痕跡 -->
+        <div class="text-center p-4 bg-green-600/30 rounded-xl">
+          <div class="text-sm text-green-200 mb-1">発見した痕跡</div>
+          <div class="text-4xl font-bold" id="traces-found">0</div>
+          <div class="text-xs text-green-300 mt-1">個</div>
         </div>
       </div>
     </div>
-    <script type="module" src="/src/main.js"></script>
-  </body>
+
+    <!-- メインゲームエリア -->
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <!-- ゲームボード -->
+      <div class="lg:col-span-3">
+        <div class="bg-white/5 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/20">
+          <div id="game-board" class="relative mx-auto" style="width: min(100%, 600px); aspect-ratio: 1;">
+            <!-- グリッドはJavaScriptで生成 -->
+          </div>
+        </div>
+      </div>
+
+      <!-- コントロールパネル -->
+      <div class="lg:col-span-1">
+        <div class="bg-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl border border-white/20 sticky top-4">
+          <h2 class="text-2xl font-bold text-white mb-4">🎮 操作</h2>
+
+          <!-- ゲーム開始ボタン -->
+          <button id="start-game-btn"
+            class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold py-3 px-6 rounded-xl mb-4 hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:scale-105">
+            ゲーム開始
+          </button>
+
+          <!-- プレイヤー選択 -->
+          <div class="mb-6">
+            <label class="block text-white text-sm font-semibold mb-2">プレイモード</label>
+            <select id="game-mode"
+              class="w-full bg-slate-800 text-white rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="human">人間 vs 人間</option>
+              <option value="ai">人間 vs AI</option>
+            </select>
+          </div>
+
+          <!-- 犯人操作パネル -->
+          <div id="criminal-panel" class="mb-6 hidden">
+            <h3 class="text-lg font-bold text-red-400 mb-3">🚗 犯人の操作</h3>
+            <div class="bg-slate-800/50 rounded-lg p-4 text-sm text-gray-300">
+              <p class="mb-2">📍 <strong>初回配置:</strong> 任意のビルをクリック</p>
+              <p>📍 <strong>移動:</strong> 隣接するビルをクリック</p>
+              <p class="text-xs text-gray-400 mt-2">※痕跡を置いた場所には戻れません</p>
+            </div>
+          </div>
+
+          <!-- 警察操作パネル -->
+          <div id="police-panel" class="mb-6 hidden">
+            <h3 class="text-lg font-bold text-blue-400 mb-3">🚁 警察の操作</h3>
+            <div class="bg-slate-800/50 rounded-lg p-4 text-sm text-gray-300 space-y-3">
+              <div>
+                <p class="font-semibold mb-1">🚁 ヘリコプター選択:</p>
+                <p class="text-xs">ヘリコプターをクリック</p>
+              </div>
+              <div>
+                <p class="font-semibold mb-1">📍 移動:</p>
+                <p class="text-xs">ヘリをドラッグ&ドロップ<br>または隣接する道路をクリック</p>
+              </div>
+              <div>
+                <p class="font-semibold mb-1">🔍 調査:</p>
+                <p class="text-xs">隣接するビルをクリック</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ターン終了ボタン -->
+          <button id="end-turn-btn"
+            class="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white font-bold py-3 px-6 rounded-xl hover:from-orange-600 hover:to-red-700 transition-all shadow-lg hidden">
+            ターン終了
+          </button>
+
+          <!-- ゲームログ -->
+          <div class="mt-6">
+            <h3 class="text-lg font-bold text-white mb-2">📋 ログ</h3>
+            <div id="game-log" class="bg-slate-900/50 rounded-lg p-3 h-48 overflow-y-auto text-sm text-white space-y-1">
+              <div class="text-gray-400">ゲームを開始してください</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ゲーム終了モーダル -->
+    <div id="game-over-modal"
+      class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden items-center justify-center z-50">
+      <div
+        class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl p-8 max-w-md mx-4 shadow-2xl border-2 border-white/20">
+        <h2 class="text-4xl font-bold text-white mb-4 text-center" id="winner-text">警察の勝利!</h2>
+        <p class="text-xl text-gray-300 mb-6 text-center" id="game-over-message">犯人を逮捕しました!</p>
+        <button id="restart-btn"
+          class="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold py-3 px-6 rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg">
+          もう一度プレイ
+        </button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+
 </html>
