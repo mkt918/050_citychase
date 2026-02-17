@@ -333,7 +333,19 @@ function handleHelicopterDrop(x, y) {
     renderHelicopters()
     addLog(`🚁 ヘリ${heli.id + 1}が移動しました`, 'police')
 
-    setTimeout(() => endTurn(), 500)
+
+    setTimeout(() => {
+      if (!gameState.helicoptersActioned.includes(heli.id)) {
+        gameState.helicoptersActioned.push(heli.id)
+      }
+      if (gameState.helicoptersActioned.length >= 3) {
+        endTurn()
+      } else {
+        gameState.selectedHelicopter = null
+        updateUI()
+        addLog(`✅ ヘリ${gameState.helicoptersActioned.length}/3機が行動完了。次のヘリを選択してください`, 'police')
+      }
+    }, 500)
   } else {
     addLog('❌ 1マス飛ばして移動する必要があります', 'error')
   }
@@ -628,8 +640,16 @@ function endTurn() {
 
 // UI更新
 function updateUI() {
-  document.getElementById('round-display').textContent = gameState.round
+  document.getElementById('round-display').textContent = `${gameState.round}/11`
   document.getElementById('turn-display').textContent = gameState.turn === 'criminal' ? '犯人' : '警察'
+
+  // 背景色をターンに応じて変更
+  const body = document.body
+  if (gameState.turn === 'police') {
+    body.className = 'bg-gradient-to-br from-blue-900 via-slate-900 to-blue-800 min-h-screen transition-all duration-1000'
+  } else {
+    body.className = 'bg-gradient-to-br from-orange-900 via-slate-900 to-orange-800 min-h-screen transition-all duration-1000'
+  }
 
   let statusText = ''
   if (gameState.phase === 'setup') {
