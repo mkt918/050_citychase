@@ -6,11 +6,11 @@
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  
+
   color-scheme: dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: #0f172a;
-  
+
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -30,9 +30,12 @@ body {
 
 /* カスタムアニメーション */
 @keyframes pulse-slow {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.7;
   }
@@ -69,4 +72,115 @@ body {
 
 #game-log::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.5);
+}
+
+/* 視覚的フィードバック */
+/* 犯人の移動可能場所 */
+.valid-move {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(22, 163, 74, 0.3)) !important;
+  box-shadow: inset 0 0 20px rgba(34, 197, 94, 0.5), 0 0 15px rgba(34, 197, 94, 0.3);
+  animation: pulse-green 2s ease-in-out infinite;
+}
+
+@keyframes pulse-green {
+
+  0%,
+  100% {
+    box-shadow: inset 0 0 20px rgba(34, 197, 94, 0.5), 0 0 15px rgba(34, 197, 94, 0.3);
+  }
+
+  50% {
+    box-shadow: inset 0 0 30px rgba(34, 197, 94, 0.7), 0 0 25px rgba(34, 197, 94, 0.5);
+  }
+}
+
+/* 警察のサーチライト効果 */
+.searchlight {
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.4), rgba(37, 99, 235, 0.2)) !important;
+  box-shadow: inset 0 0 30px rgba(59, 130, 246, 0.6), 0 0 20px rgba(59, 130, 246, 0.4);
+  animation: searchlight-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes searchlight-pulse {
+
+  0%,
+  100% {
+    box-shadow: inset 0 0 30px rgba(59, 130, 246, 0.6), 0 0 20px rgba(59, 130, 246, 0.4);
+  }
+
+  50% {
+    box-shadow: inset 0 0 50px rgba(59, 130, 246, 0.8), 0 0 35px rgba(59, 130, 246, 0.6);
+  }
+}
+
+/* 犯人の透視モード */
+.xray-mode {
+  background: radial-gradient(circle, rgba(234, 179, 8, 0.5), rgba(202, 138, 4, 0.3)) !important;
+  box-shadow: inset 0 0 40px rgba(234, 179, 8, 0.7), 0 0 30px rgba(234, 179, 8, 0.5);
+  animation: xray-glow 2s ease-in-out infinite;
+  position: relative;
+}
+
+.xray-mode::after {
+  content: '🚗';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 2.5rem;
+  filter: drop-shadow(0 0 10px rgba(234, 179, 8, 0.8));
+  animation: car-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes xray-glow {
+
+  0%,
+  100% {
+    box-shadow: inset 0 0 40px rgba(234, 179, 8, 0.7), 0 0 30px rgba(234, 179, 8, 0.5);
+  }
+
+  50% {
+    box-shadow: inset 0 0 60px rgba(234, 179, 8, 0.9), 0 0 45px rgba(234, 179, 8, 0.7);
+  }
+}
+
+@keyframes car-pulse {
+
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    filter: drop-shadow(0 0 10px rgba(234, 179, 8, 0.8));
+  }
+
+  50% {
+    transform: translate(-50%, -50%) scale(1.1);
+    filter: drop-shadow(0 0 20px rgba(234, 179, 8, 1));
+  }
+}
+
+/* 警察の移動可能場所 */
+.valid-heli-move {
+  background: rgba(59, 130, 246, 0.2) !important;
+  box-shadow: inset 0 0 15px rgba(59, 130, 246, 0.4);
+  border: 2px solid rgba(59, 130, 246, 0.6) !important;
+}
+
+/* ヘリ配置可能場所 (setup時) */
+.valid-heli-placement {
+  background: rgba(34, 197, 94, 0.2) !important;
+  box-shadow: inset 0 0 20px rgba(34, 197, 94, 0.5);
+  border: 2px solid rgba(34, 197, 94, 0.7) !important;
+  animation: placement-pulse 2s ease-in-out infinite;
+}
+
+@keyframes placement-pulse {
+
+  0%,
+  100% {
+    box-shadow: inset 0 0 20px rgba(34, 197, 94, 0.5);
+  }
+
+  50% {
+    box-shadow: inset 0 0 30px rgba(34, 197, 94, 0.7);
+  }
 }
