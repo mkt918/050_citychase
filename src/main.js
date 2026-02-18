@@ -235,26 +235,28 @@ function updateVisualFeedback() {
       })
     }
 
-    // 犯人ターンは常に透視モード（過去の移動履歴＋現在位置を常時表示）
-    gameState.criminalTraces.forEach(trace => {
-      const cell = document.querySelector(`[data-x="${trace.x}"][data-y="${trace.y}"]`)
-      if (cell) {
-        if (gameState.criminalPosition && trace.x === gameState.criminalPosition.x && trace.y === gameState.criminalPosition.y) {
-          cell.classList.add('xray-mode')
-        } else {
-          cell.classList.add('xray-trace')
+    // 透視モード (ボタンがONの時のみ)
+    if (gameState.xrayMode) {
+      gameState.criminalTraces.forEach(trace => {
+        const cell = document.querySelector(`[data-x="${trace.x}"][data-y="${trace.y}"]`)
+        if (cell) {
+          if (gameState.criminalPosition && trace.x === gameState.criminalPosition.x && trace.y === gameState.criminalPosition.y) {
+            cell.classList.add('xray-mode')
+          } else {
+            cell.classList.add('xray-trace')
+          }
         }
-      }
-    })
+      })
 
-    // 移動可能場所も常時表示
-    const validMoves2 = getValidCriminalMoves()
-    validMoves2.forEach(pos => {
-      const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
-      if (cell) {
-        cell.classList.add('valid-move')
-      }
-    })
+      // 透視オン時は移動可能場所も表示
+      const validMoves2 = getValidCriminalMoves()
+      validMoves2.forEach(pos => {
+        const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
+        if (cell) {
+          cell.classList.add('valid-move')
+        }
+      })
+    }
   }
 
   // 警察ターン
@@ -550,9 +552,16 @@ function moveCriminalToBuilding(x, y) {
   }
 
   if (!gameState.criminalPosition) {
-    // 初回配置: 確認ダイアログ
+    // 初回配置: 自動で透視モードをONにして配置場所を表示
+    gameState.xrayMode = true
+    const xrayBtn = document.getElementById('xray-btn')
+    if (xrayBtn) {
+      xrayBtn.classList.add('bg-yellow-500')
+      xrayBtn.classList.remove('bg-slate-700')
+    }
+    updateVisualFeedback()
     const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
-    if (cell) cell.classList.add('xray-mode') // 選択中のビルを強調
+    if (cell) cell.classList.add('xray-mode')
     showConfirm({
       icon: '🚗',
       title: '犯人の初期配置',
@@ -710,12 +719,19 @@ function searchBuilding(x, y) {
 // ターン終了
 function endTurn() {
   if (gameState.turn === 'criminal') {
+    // 犯人ターン終了時に透視モードを強制OFF
+    gameState.xrayMode = false
+    const xrayBtn = document.getElementById('xray-btn')
+    if (xrayBtn) {
+      xrayBtn.classList.remove('bg-yellow-500')
+      xrayBtn.classList.add('bg-slate-700')
+    }
     gameState.turn = 'police'
     gameState.selectedHelicopter = null
-    gameState.helicoptersActioned = [] // 警察ターン開始時にリセット
+    gameState.helicoptersActioned = []
     updateUI()
     addLog('🚁 警察のターンです。ヘリ1から順番に操作してください', 'police')
-    setTimeout(() => selectNextHelicopter(), 300) // ヘリ1を自動選択
+    setTimeout(() => selectNextHelicopter(), 300)
   } else {
     gameState.turn = 'criminal'
     gameState.round++
