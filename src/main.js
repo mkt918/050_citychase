@@ -48,31 +48,25 @@ const gameState = {
     { id: 2, x: null, y: null }
   ],
   selectedHelicopter: null,
-  policeMode: 'move', // 'move' or 'search'
   discoveredTraces: [],
   gameOver: false,
-  draggedHelicopter: null,
   xrayMode: false, // 犯人の透視モード
   showPrediction: false, // 犯人の移動予測モード
   phase: 'setup', // 'setup' or 'play'
   helicoptersPlaced: 0,
-  activeHelicopterIndex: 0, // 警察ターンで現在操作中のヘリ(0-2)
   helicoptersActioned: [] // 警察ターンで既に行動したヘリのID
 }
 
 // グリッドサイズ: 9x9 (ビル5x5 + 道路4x4が交互配置)
 const GRID_SIZE = 9
 const BUILDING_POSITIONS = [] // ビルの座標リスト
-const ROAD_POSITIONS = [] // 道路の座標リスト
 
-// ビルと道路の座標を事前計算
+// ビルの座標を事前計算
 for (let y = 0; y < GRID_SIZE; y++) {
   for (let x = 0; x < GRID_SIZE; x++) {
     // 偶数行・偶数列 = ビル
     if (x % 2 === 0 && y % 2 === 0) {
       BUILDING_POSITIONS.push({ x, y })
-    } else {
-      ROAD_POSITIONS.push({ x, y })
     }
   }
 }
@@ -184,24 +178,6 @@ function initBoard() {
         // 道路のセル
         cell.className += ' road-cell bg-slate-900/30 hover:bg-slate-800/40 transition-all'
         cell.addEventListener('click', () => handleRoadClick(x, y))
-
-        // ドロップ可能エリア
-        cell.addEventListener('dragover', (e) => {
-          e.preventDefault()
-          if (gameState.draggedHelicopter !== null) {
-            cell.classList.add('bg-blue-500/20')
-          }
-        })
-
-        cell.addEventListener('dragleave', () => {
-          cell.classList.remove('bg-blue-500/20')
-        })
-
-        cell.addEventListener('drop', (e) => {
-          e.preventDefault()
-          cell.classList.remove('bg-blue-500/20')
-          handleHelicopterDrop(x, y)
-        })
       }
 
       gridContainer.appendChild(cell)
@@ -309,33 +285,15 @@ function renderHelicopters() {
     if (cell) {
       const heliEl = document.createElement('div')
       heliEl.className = 'helicopter absolute inset-0 flex items-center justify-center z-10'
-      // setupフェーズではドラッグ無効化
-      heliEl.draggable = gameState.phase === 'play' && gameState.turn === 'police' && !gameState.gameOver
       heliEl.dataset.heliId = heli.id
 
       const isSelected = gameState.selectedHelicopter === heli.id
       const isActioned = gameState.helicoptersActioned.includes(heli.id)
       heliEl.innerHTML = `
-        <div class="text-4xl cursor-move transition-transform ${isSelected ? 'scale-125 drop-shadow-lg' : isActioned ? 'opacity-40 grayscale' : 'hover:scale-110'}">
+        <div class="text-4xl cursor-pointer transition-transform ${isSelected ? 'scale-125 drop-shadow-lg' : isActioned ? 'opacity-40 grayscale' : 'hover:scale-110'}">
           🚁
         </div>
       `
-
-      // ドラッグイベント (playフェーズのみ、行動済みは不可)
-      heliEl.addEventListener('dragstart', (e) => {
-        if (gameState.phase === 'play' && gameState.turn === 'police' && !gameState.gameOver && !isActioned) {
-          gameState.draggedHelicopter = heli.id
-          gameState.selectedHelicopter = heli.id
-          e.dataTransfer.effectAllowed = 'move'
-          heliEl.style.opacity = '0.5'
-          addLog(`🚁 ヘリ${heli.id + 1}を選択`, 'police')
-        }
-      })
-
-      heliEl.addEventListener('dragend', () => {
-        heliEl.style.opacity = '1'
-        gameState.draggedHelicopter = null
-      })
 
       // クリックで選択 (行動済みは不可)
       heliEl.addEventListener('click', (e) => {
@@ -378,42 +336,6 @@ function onHelicopterActioned(heliId) {
     gameState.selectedHelicopter = null
     updateUI()
     setTimeout(() => selectNextHelicopter(), 300)
-  }
-}
-
-// ヘリコプタードロップ処理
-function handleHelicopterDrop(x, y) {
-  if (gameState.draggedHelicopter === null) return
-  if (!gameState.isGameStarted || gameState.gameOver) return
-  if (gameState.turn !== 'police') return
-
-  const heli = gameState.helicopters[gameState.draggedHelicopter]
-
-  // 道路かチェック
-  if (!isRoad(x, y)) {
-    addLog('❌ ヘリコプターは道路にのみ配置できます', 'error')
-    return
-  }
-
-  // 隣接チェック(縦横のみ)
-  const dx = Math.abs(x - heli.x)
-  const dy = Math.abs(y - heli.y)
-
-  if ((dx === 1 && dy === 0) || (dx === 0 && dy === 1)) {
-    // 他のヘリコプターがいないかチェック
-    if (gameState.helicopters.some(h => h.x === x && h.y === y && h.id !== heli.id)) {
-      addLog('❌ 他のヘリコプターがいます', 'error')
-      return
-    }
-
-    heli.x = x
-    heli.y = y
-    renderHelicopters()
-    addLog(`🚁 ヘリ${heli.id + 1}が移動しました`, 'police')
-
-    setTimeout(() => onHelicopterActioned(heli.id), 500)
-  } else {
-    addLog('❌ 1マス飛ばして移動する必要があります', 'error')
   }
 }
 
@@ -520,6 +442,11 @@ function handleRoadClick(x, y) {
     return
   }
 
+  if (gameState.turn === 'police' && gameState.selectedHelicopter === null) {
+    addLog('❌ ヘリコプターを選択してください', 'error')
+    return
+  }
+
   if (gameState.turn === 'police' && gameState.selectedHelicopter !== null) {
     // 選択中のヘリコプターを移動
     const heli = gameState.helicopters[gameState.selectedHelicopter]
@@ -552,14 +479,7 @@ function moveCriminalToBuilding(x, y) {
   }
 
   if (!gameState.criminalPosition) {
-    // 初回配置: 自動で透視モードをONにして配置場所を表示
-    gameState.xrayMode = true
-    const xrayBtn = document.getElementById('xray-btn')
-    if (xrayBtn) {
-      xrayBtn.classList.add('bg-yellow-500')
-      xrayBtn.classList.remove('bg-slate-700')
-    }
-    updateVisualFeedback()
+    // 初回配置: クリックしたビルをハイライトして確認
     const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
     if (cell) cell.classList.add('xray-mode')
     showConfirm({
@@ -577,6 +497,13 @@ function moveCriminalToBuilding(x, y) {
         endTurn()
       }
     })
+    return
+  }
+
+  // 行き詰まりチェック（人間プレイ時）
+  const validMoves = getValidCriminalMoves()
+  if (validMoves.length === 0) {
+    endGame('police', '犯人が包囲されました!')
     return
   }
 
@@ -626,18 +553,8 @@ function aiCriminalMove() {
     return
   }
 
-  // 隣接するビルを探す
-  const adjacentBuildings = [
-    { x: gameState.criminalPosition.x - 2, y: gameState.criminalPosition.y },
-    { x: gameState.criminalPosition.x + 2, y: gameState.criminalPosition.y },
-    { x: gameState.criminalPosition.x, y: gameState.criminalPosition.y - 2 },
-    { x: gameState.criminalPosition.x, y: gameState.criminalPosition.y + 2 }
-  ].filter(pos =>
-    pos.x >= 0 && pos.x < GRID_SIZE &&
-    pos.y >= 0 && pos.y < GRID_SIZE &&
-    isBuilding(pos.x, pos.y) &&
-    !gameState.criminalTraces.some(t => t.x === pos.x && t.y === pos.y)
-  )
+  // 移動可能なビルを取得（getValidCriminalMovesを再利用）
+  const adjacentBuildings = getValidCriminalMoves()
 
   if (adjacentBuildings.length === 0) {
     endGame('police', '犯人が包囲されました!')
@@ -712,7 +629,8 @@ function searchBuilding(x, y) {
       addLog('🔍 何も見つかりませんでした', 'info')
     }
 
-    setTimeout(() => onHelicopterActioned(gameState.selectedHelicopter), 500)
+    const heliId = gameState.selectedHelicopter
+    setTimeout(() => onHelicopterActioned(heliId), 500)
   })
 }
 
@@ -768,7 +686,7 @@ function updateUI() {
   if (gameState.phase === 'setup') {
     statusText = `ヘリコプターを配置中 (${gameState.helicoptersPlaced}/3)`
   } else {
-    statusText = gameState.turn === 'criminal' ? 'ビルをクリック' : 'ヘリをドラッグ'
+    statusText = gameState.turn === 'criminal' ? 'ビルをクリック' : '道路をクリック'
   }
   document.getElementById('turn-status').textContent = statusText
 
@@ -801,6 +719,7 @@ function updateUI() {
 // ゲーム終了
 function endGame(winner, message) {
   gameState.gameOver = true
+  updateUI()
   document.getElementById('winner-text').textContent = winner === 'police' ? '🚁 警察の勝利!' : '🚗 犯人の勝利!'
   document.getElementById('game-over-message').textContent = message
   document.getElementById('game-over-modal').classList.remove('hidden')
@@ -840,6 +759,9 @@ document.getElementById('start-game-btn').addEventListener('click', () => {
   gameState.discoveredTraces = []
   gameState.gameOver = false
   gameState.selectedHelicopter = null
+  gameState.helicoptersActioned = []
+  gameState.xrayMode = false
+  gameState.showPrediction = false
 
   // ヘリの位置リセット
   gameState.helicopters.forEach(h => {
@@ -872,6 +794,7 @@ document.getElementById('quit-game-btn').addEventListener('click', () => {
     if (confirmed) {
       gameState.isGameStarted = false
       gameState.gameOver = true
+      gameState.turn = 'police' // 背景色を青系（初期状態）に戻す
       document.getElementById('start-game-btn').classList.remove('hidden')
       document.getElementById('quit-game-btn').classList.add('hidden')
       addLog('🚪 ゲームを終了しました', 'info')
