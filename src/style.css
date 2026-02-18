@@ -158,6 +158,23 @@ body {
   }
 }
 
+/* 犯人の過去の移動履歴（透視モード） */
+.xray-trace {
+  background: radial-gradient(circle, rgba(234, 179, 8, 0.2), rgba(202, 138, 4, 0.1)) !important;
+  box-shadow: inset 0 0 15px rgba(234, 179, 8, 0.3);
+  position: relative;
+}
+
+.xray-trace::after {
+  content: '👣';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.5rem;
+  opacity: 0.7;
+}
+
 /* 警察の移動可能場所 */
 .valid-heli-move {
   background: rgba(251, 191, 36, 0.2) !important;

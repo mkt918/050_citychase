@@ -1,5 +1,39 @@
 import './style.css'
 
+// 確認ダイアログ表示ユーティリティ
+function showConfirm({ icon = '❓', title = '確認', message = 'よろしいですか？', okLabel = '✅ 確認', cancelLabel = '❌ キャンセル' } = {}) {
+  return new Promise((resolve) => {
+    const dialog = document.getElementById('confirm-dialog')
+    document.getElementById('confirm-icon').textContent = icon
+    document.getElementById('confirm-title').textContent = title
+    document.getElementById('confirm-message').textContent = message
+    const okBtn = document.getElementById('confirm-ok-btn')
+    const cancelBtn = document.getElementById('confirm-cancel-btn')
+    okBtn.textContent = okLabel
+    cancelBtn.textContent = cancelLabel
+
+    dialog.classList.remove('hidden')
+    dialog.classList.add('flex')
+
+    const onOk = () => {
+      dialog.classList.add('hidden')
+      dialog.classList.remove('flex')
+      okBtn.removeEventListener('click', onOk)
+      cancelBtn.removeEventListener('click', onCancel)
+      resolve(true)
+    }
+    const onCancel = () => {
+      dialog.classList.add('hidden')
+      dialog.classList.remove('flex')
+      okBtn.removeEventListener('click', onOk)
+      cancelBtn.removeEventListener('click', onCancel)
+      resolve(false)
+    }
+    okBtn.addEventListener('click', onOk)
+    cancelBtn.addEventListener('click', onCancel)
+  })
+}
+
 // ゲーム状態管理
 const gameState = {
   round: 1,
@@ -183,7 +217,7 @@ function initBoard() {
 function updateVisualFeedback() {
   // すべてのハイライトをクリア
   document.querySelectorAll('.building-cell, .road-cell').forEach(cell => {
-    cell.classList.remove('valid-move', 'searchlight', 'xray-mode', 'valid-heli-move', 'valid-heli-placement')
+    cell.classList.remove('valid-move', 'searchlight', 'xray-mode', 'xray-trace', 'valid-heli-move', 'valid-heli-placement')
   })
 
   if (!gameState.isGameStarted || gameState.gameOver) return
@@ -201,13 +235,26 @@ function updateVisualFeedback() {
       })
     }
 
-    // 透視モード (ボタンがONの時のみ)
-    if (gameState.xrayMode && gameState.criminalPosition) {
-      const currentCell = document.querySelector(`[data-x="${gameState.criminalPosition.x}"][data-y="${gameState.criminalPosition.y}"]`)
-      if (currentCell) {
-        currentCell.classList.add('xray-mode')
+    // 犯人ターンは常に透視モード（過去の移動履歴＋現在位置を常時表示）
+    gameState.criminalTraces.forEach(trace => {
+      const cell = document.querySelector(`[data-x="${trace.x}"][data-y="${trace.y}"]`)
+      if (cell) {
+        if (gameState.criminalPosition && trace.x === gameState.criminalPosition.x && trace.y === gameState.criminalPosition.y) {
+          cell.classList.add('xray-mode')
+        } else {
+          cell.classList.add('xray-trace')
+        }
       }
-    }
+    })
+
+    // 移動可能場所も常時表示
+    const validMoves2 = getValidCriminalMoves()
+    validMoves2.forEach(pos => {
+      const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
+      if (cell) {
+        cell.classList.add('valid-move')
+      }
+    })
   }
 
   // 警察ターン
@@ -434,18 +481,38 @@ function handleRoadClick(x, y) {
       renderHelicopters()
 
       if (gameState.helicoptersPlaced === 3) {
-        gameState.phase = 'play'
-        addLog('✅ 配置完了。犯人のターンから開始します', 'success')
-        setTimeout(() => {
-          gameState.turn = 'criminal'
-          updateUI()
-          if (gameState.gameMode === 'ai') {
-            aiCriminalMove()
+        // 3機配置完了→確認ダイアログ
+        addLog('❓ 3機配置完了。この配置でよいか確認してください', 'police')
+        showConfirm({
+          icon: '🚁',
+          title: 'ヘリ配置の確認',
+          message: 'この配置でゲームを開始しますか？\n「キャンセル」で配置をやり直せます。',
+          okLabel: '✅ これで開始',
+          cancelLabel: '🔄 やり直す'
+        }).then(confirmed => {
+          if (confirmed) {
+            gameState.phase = 'play'
+            addLog('✅ 配置完了。犯人のターンから開始します', 'success')
+            setTimeout(() => {
+              gameState.turn = 'criminal'
+              updateUI()
+              if (gameState.gameMode === 'ai') {
+                aiCriminalMove()
+              }
+            }, 500)
+          } else {
+            // やり直し: 全ヘリをリセット
+            gameState.helicoptersPlaced = 0
+            gameState.helicopters.forEach(h => { h.x = null; h.y = null })
+            addLog('🔄 配置をリセットしました。再度配置してください', 'police')
+            renderHelicopters()
+            updateUI()
+            updateVisualFeedback()
           }
-        }, 1000)
+        })
       } else {
         updateUI()
-        updateVisualFeedback() // 次の配置可能場所を更新
+        updateVisualFeedback()
       }
     }
     return
@@ -483,11 +550,24 @@ function moveCriminalToBuilding(x, y) {
   }
 
   if (!gameState.criminalPosition) {
-    // 初回配置
-    gameState.criminalPosition = { x, y }
-    gameState.criminalTraces.push({ x, y, round: gameState.round })
-    addLog(`🚗 犯人が配置されました (ラウンド${gameState.round})`, 'criminal')
-    endTurn()
+    // 初回配置: 確認ダイアログ
+    const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
+    if (cell) cell.classList.add('xray-mode') // 選択中のビルを強調
+    showConfirm({
+      icon: '🚗',
+      title: '犯人の初期配置',
+      message: 'このビルに隠れますか？',
+      okLabel: '✅ ここに隠れる',
+      cancelLabel: '❌ やり直す'
+    }).then(confirmed => {
+      if (cell) cell.classList.remove('xray-mode')
+      if (confirmed) {
+        gameState.criminalPosition = { x, y }
+        gameState.criminalTraces.push({ x, y, round: gameState.round })
+        addLog(`🚗 犯人が配置されました (ラウンド${gameState.round})`, 'criminal')
+        endTurn()
+      }
+    })
     return
   }
 
@@ -502,10 +582,24 @@ function moveCriminalToBuilding(x, y) {
       return
     }
 
-    gameState.criminalPosition = { x, y }
-    gameState.criminalTraces.push({ x, y, round: gameState.round })
-    addLog(`🚗 犯人が移動しました (ラウンド${gameState.round})`, 'criminal')
-    endTurn()
+    // 移動先を強調しながら確認
+    const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
+    if (cell) cell.classList.add('xray-mode')
+    showConfirm({
+      icon: '🚗',
+      title: '移動の確認',
+      message: 'このビルに移動しますか？',
+      okLabel: '✅ ここに移動',
+      cancelLabel: '❌ キャンセル'
+    }).then(confirmed => {
+      if (cell) cell.classList.remove('xray-mode')
+      if (confirmed) {
+        gameState.criminalPosition = { x, y }
+        gameState.criminalTraces.push({ x, y, round: gameState.round })
+        addLog(`🚗 犯人が移動しました (ラウンド${gameState.round})`, 'criminal')
+        endTurn()
+      }
+    })
   } else {
     addLog('❌ 隣接するビルにのみ移動できます', 'error')
   }
@@ -577,26 +671,40 @@ function searchBuilding(x, y) {
     return
   }
 
-  // 犯人の車を発見
-  if (gameState.criminalPosition &&
-    gameState.criminalPosition.x === x &&
-    gameState.criminalPosition.y === y) {
-    endGame('police', '犯人の車を発見しました!')
-    return
-  }
+  // 確認ダイアログを表示してから調査実行
+  const searchCell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
+  if (searchCell) searchCell.classList.add('searchlight')
+  showConfirm({
+    icon: '🔍',
+    title: 'ビル調査の確認',
+    message: `ヘリ${heli.id + 1}でこのビルを調査しますか？`,
+    okLabel: '✅ 調査する',
+    cancelLabel: '❌ キャンセル'
+  }).then(confirmed => {
+    if (searchCell) searchCell.classList.remove('searchlight')
+    if (!confirmed) return
 
-  // 痕跡を発見
-  const trace = gameState.criminalTraces.find(t => t.x === x && t.y === y)
-  if (trace && !gameState.discoveredTraces.some(d => d.x === x && d.y === y)) {
-    gameState.discoveredTraces.push(trace)
-    renderTraces()
-    addLog(`🔍 痕跡を発見! (ラウンド${trace.round})`, 'success')
-    document.getElementById('traces-found').textContent = gameState.discoveredTraces.length
-  } else {
-    addLog('🔍 何も見つかりませんでした', 'info')
-  }
+    // 犯人の車を発見
+    if (gameState.criminalPosition &&
+      gameState.criminalPosition.x === x &&
+      gameState.criminalPosition.y === y) {
+      endGame('police', '犯人の車を発見しました!')
+      return
+    }
 
-  setTimeout(() => onHelicopterActioned(gameState.selectedHelicopter), 500)
+    // 痕跡を発見
+    const trace = gameState.criminalTraces.find(t => t.x === x && t.y === y)
+    if (trace && !gameState.discoveredTraces.some(d => d.x === x && d.y === y)) {
+      gameState.discoveredTraces.push(trace)
+      renderTraces()
+      addLog(`🔍 痕跡を発見! (ラウンド${trace.round})`, 'success')
+      document.getElementById('traces-found').textContent = gameState.discoveredTraces.length
+    } else {
+      addLog('🔍 何も見つかりませんでした', 'info')
+    }
+
+    setTimeout(() => onHelicopterActioned(gameState.selectedHelicopter), 500)
+  })
 }
 
 // ターン終了
@@ -726,10 +834,34 @@ document.getElementById('start-game-btn').addEventListener('click', () => {
   document.getElementById('game-log').innerHTML = ''
   document.getElementById('traces-found').textContent = '0'
 
+  // ゲーム開始ボタンを非表示、終了ボタンを表示
+  document.getElementById('start-game-btn').classList.add('hidden')
+  document.getElementById('quit-game-btn').classList.remove('hidden')
+
   initBoard()
   updateUI()
   addLog('🎮 ゲーム開始!', 'success')
   addLog('🚁 警察のターン: 道路をクリックしてヘリコプターを3台配置してください', 'police')
+})
+
+// ゲーム終了ボタン
+document.getElementById('quit-game-btn').addEventListener('click', () => {
+  showConfirm({
+    icon: '🚪',
+    title: 'ゲームを終了しますか？',
+    message: '現在のゲームを終了してタイトルに戻ります。\n進行状況は失われます。',
+    okLabel: '🚪 終了する',
+    cancelLabel: '▶️ 続ける'
+  }).then(confirmed => {
+    if (confirmed) {
+      gameState.isGameStarted = false
+      gameState.gameOver = true
+      document.getElementById('start-game-btn').classList.remove('hidden')
+      document.getElementById('quit-game-btn').classList.add('hidden')
+      addLog('🚪 ゲームを終了しました', 'info')
+      updateUI()
+    }
+  })
 })
 
 // 透視モードボタン
