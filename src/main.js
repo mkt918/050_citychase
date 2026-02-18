@@ -265,15 +265,16 @@ function renderHelicopters() {
       heliEl.dataset.heliId = heli.id
 
       const isSelected = gameState.selectedHelicopter === heli.id
+      const isActioned = gameState.helicoptersActioned.includes(heli.id)
       heliEl.innerHTML = `
-        <div class="text-4xl cursor-move transition-transform ${isSelected ? 'scale-125 drop-shadow-lg' : 'hover:scale-110'}">
+        <div class="text-4xl cursor-move transition-transform ${isSelected ? 'scale-125 drop-shadow-lg' : isActioned ? 'opacity-40 grayscale' : 'hover:scale-110'}">
           🚁
         </div>
       `
 
-      // ドラッグイベント (playフェーズのみ)
+      // ドラッグイベント (playフェーズのみ、行動済みは不可)
       heliEl.addEventListener('dragstart', (e) => {
-        if (gameState.phase === 'play' && gameState.turn === 'police' && !gameState.gameOver) {
+        if (gameState.phase === 'play' && gameState.turn === 'police' && !gameState.gameOver && !isActioned) {
           gameState.draggedHelicopter = heli.id
           gameState.selectedHelicopter = heli.id
           e.dataTransfer.effectAllowed = 'move'
@@ -287,20 +288,48 @@ function renderHelicopters() {
         gameState.draggedHelicopter = null
       })
 
-      // クリックで選択
+      // クリックで選択 (行動済みは不可)
       heliEl.addEventListener('click', (e) => {
         e.stopPropagation()
-        if (gameState.turn === 'police' && !gameState.gameOver) {
+        if (gameState.turn === 'police' && !gameState.gameOver && !isActioned) {
           gameState.selectedHelicopter = heli.id
           renderHelicopters()
           updateVisualFeedback()
           addLog(`🚁 ヘリ${heli.id + 1}を選択`, 'police')
+        } else if (isActioned) {
+          addLog(`❌ ヘリ${heli.id + 1}は今ターン既に行動済みです`, 'error')
         }
       })
 
       cell.appendChild(heliEl)
     }
   })
+}
+
+// 次の未行動ヘリを自動選択する
+function selectNextHelicopter() {
+  const nextHeli = gameState.helicopters.find(h => !gameState.helicoptersActioned.includes(h.id))
+  if (nextHeli) {
+    gameState.selectedHelicopter = nextHeli.id
+    renderHelicopters()
+    updateVisualFeedback()
+    addLog(`🚁 ヘリ${nextHeli.id + 1}を操作してください（移動または調査）`, 'police')
+  }
+}
+
+// 行動完了後の処理（次のヘリ選択またはターン終了）
+function onHelicopterActioned(heliId) {
+  if (!gameState.helicoptersActioned.includes(heliId)) {
+    gameState.helicoptersActioned.push(heliId)
+  }
+
+  if (gameState.helicoptersActioned.length >= 3) {
+    endTurn()
+  } else {
+    gameState.selectedHelicopter = null
+    updateUI()
+    setTimeout(() => selectNextHelicopter(), 300)
+  }
 }
 
 // ヘリコプタードロップ処理
@@ -333,19 +362,7 @@ function handleHelicopterDrop(x, y) {
     renderHelicopters()
     addLog(`🚁 ヘリ${heli.id + 1}が移動しました`, 'police')
 
-
-    setTimeout(() => {
-      if (!gameState.helicoptersActioned.includes(heli.id)) {
-        gameState.helicoptersActioned.push(heli.id)
-      }
-      if (gameState.helicoptersActioned.length >= 3) {
-        endTurn()
-      } else {
-        gameState.selectedHelicopter = null
-        updateUI()
-        addLog(`✅ ヘリ${gameState.helicoptersActioned.length}/3機が行動完了。次のヘリを選択してください`, 'police')
-      }
-    }, 500)
+    setTimeout(() => onHelicopterActioned(heli.id), 500)
   } else {
     addLog('❌ 1マス飛ばして移動する必要があります', 'error')
   }
@@ -451,21 +468,7 @@ function handleRoadClick(x, y) {
       renderHelicopters()
       addLog(`🚁 ヘリ${heli.id + 1}が移動しました`, 'police')
 
-      setTimeout(() => {
-        // 行動完了したヘリを記録
-        if (!gameState.helicoptersActioned.includes(heli.id)) {
-          gameState.helicoptersActioned.push(heli.id)
-        }
-
-        // 3機すべて行動完了かチェック
-        if (gameState.helicoptersActioned.length >= 3) {
-          endTurn()
-        } else {
-          gameState.selectedHelicopter = null
-          updateUI()
-          addLog(`✅ ヘリ${gameState.helicoptersActioned.length}/3機が行動完了。次のヘリを選択してください`, 'police')
-        }
-      }, 500)
+      setTimeout(() => onHelicopterActioned(heli.id), 500)
     } else {
       addLog('❌ 1マス飛ばして移動する必要があります', 'error')
     }
@@ -593,22 +596,7 @@ function searchBuilding(x, y) {
     addLog('🔍 何も見つかりませんでした', 'info')
   }
 
-  setTimeout(() => {
-    // 行動完了したヘリを記録
-    if (!gameState.helicoptersActioned.includes(gameState.selectedHelicopter)) {
-      gameState.helicoptersActioned.push(gameState.selectedHelicopter)
-    }
-
-    // 3機すべて行動完了かチェック
-    if (gameState.helicoptersActioned.length >= 3) {
-      endTurn()
-    } else {
-      // 次のヘリを自動選択
-      gameState.selectedHelicopter = null
-      updateUI()
-      addLog(`✅ ヘリ${gameState.helicoptersActioned.length}/3機が行動完了。次のヘリを選択してください`, 'police')
-    }
-  }, 500)
+  setTimeout(() => onHelicopterActioned(gameState.selectedHelicopter), 500)
 }
 
 // ターン終了
@@ -618,7 +606,8 @@ function endTurn() {
     gameState.selectedHelicopter = null
     gameState.helicoptersActioned = [] // 警察ターン開始時にリセット
     updateUI()
-    addLog('🚁 警察のターンです。ヘリコプターを選択してください', 'police')
+    addLog('🚁 警察のターンです。ヘリ1から順番に操作してください', 'police')
+    setTimeout(() => selectNextHelicopter(), 300) // ヘリ1を自動選択
   } else {
     gameState.turn = 'criminal'
     gameState.round++
