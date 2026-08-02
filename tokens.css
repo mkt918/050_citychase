@@ -1,0 +1,87 @@
+/* Hallmark tokens — City Chase (citychase-online)
+ * genre: atmospheric · theme: custom "Nightbeat" (Midnight-family, dual-faction tuned)
+ * Portable design tokens. Do not hardcode raw OKLCH/hex/font-family values outside this file.
+ */
+:root {
+  /* ---------- Colour: graphite-grey anchor (hue 250, low chroma — lighter than a
+     near-black navy so the canvas reads as "dark grey", not "black"). ---------- */
+  --color-paper:      oklch(23% 0.008 250);
+  --color-paper-2:    oklch(28% 0.009 250);
+  --color-paper-3:    oklch(33% 0.010 250);
+  --color-paper-4:    oklch(38% 0.010 250);
+  --color-rule:       oklch(44% 0.010 250);
+  --color-rule-2:     oklch(52% 0.010 250);
+  --color-ink:        oklch(95% 0.006 250);
+  --color-ink-2:      oklch(83% 0.008 250);
+  --color-muted:      oklch(68% 0.010 250);
+
+  /* Brand accent — warm amber bloom (atmospheric doctrine: one warm accent, ≤3% of viewport) */
+  --color-accent:      oklch(76% 0.16 60);
+  --color-accent-2:    oklch(68% 0.17 55);
+  --color-accent-ink:  oklch(16% 0.02 60);
+  --color-focus:       oklch(80% 0.16 60);
+
+  /* Functional faction colours — NOT decorative accents. These carry game meaning
+     (police vs criminal identity, trace age) and must stay legible at small sizes. */
+  --color-police:      oklch(72% 0.13 235);
+  --color-police-2:    oklch(58% 0.13 235);
+  --color-police-ink:  oklch(14% 0.02 235);
+  --color-criminal:    oklch(70% 0.17 35);
+  --color-criminal-2:  oklch(56% 0.17 32);
+  --color-criminal-ink: oklch(14% 0.02 35);
+
+  --color-success:     oklch(74% 0.15 152);
+  --color-success-ink: oklch(14% 0.03 152);
+  --color-danger:      oklch(66% 0.19 25);
+  --color-danger-ink:  oklch(14% 0.03 25);
+
+  /* ---------- Typography ---------- */
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-body:    "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-outlier: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-md:   1.125rem;
+  --text-lg:   1.375rem;
+  --text-xl:   1.75rem;
+  --text-2xl:  2.1875rem;
+  --text-3xl:  2.75rem;
+  --text-display: clamp(2.25rem, 4vw + 1rem, 3.75rem);
+
+  /* ---------- Spacing (4pt scale) ---------- */
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs:  0.5rem;
+  --space-sm:  0.75rem;
+  --space-md:  1rem;
+  --space-lg:  1.5rem;
+  --space-xl:  2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+
+  /* ---------- Radius ---------- */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-pill: 999px;
+
+  /* ---------- Motion ---------- */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:     cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long:  420ms;
+
+  /* ---------- Z-index scale ---------- */
+  --z-base:     1;
+  --z-raised:   10;
+  --z-dropdown: 100;
+  --z-sticky:   200;
+  --z-modal:    400;
+  --z-toast:    500;
+  --z-tooltip:  600;
+}

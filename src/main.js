@@ -1,6 +1,9 @@
 import './style.css'
+import * as fb from './firebase.js'
 
-// 確認ダイアログ表示ユーティリティ
+// ---------------------------------------------------------------------------
+// 確認ダイアログ (<dialog> ベース)
+// ---------------------------------------------------------------------------
 function showConfirm({ icon = '❓', title = '確認', message = 'よろしいですか？', okLabel = '✅ 確認', cancelLabel = '❌ キャンセル' } = {}) {
   return new Promise((resolve) => {
     const dialog = document.getElementById('confirm-dialog')
@@ -12,87 +15,210 @@ function showConfirm({ icon = '❓', title = '確認', message = 'よろしい�
     okBtn.textContent = okLabel
     cancelBtn.textContent = cancelLabel
 
-    dialog.classList.remove('hidden')
-    dialog.classList.add('flex')
+    dialog.showModal()
 
-    const onOk = () => {
-      dialog.classList.add('hidden')
-      dialog.classList.remove('flex')
+    let settled = false
+    const cleanup = () => {
       okBtn.removeEventListener('click', onOk)
       cancelBtn.removeEventListener('click', onCancel)
+      dialog.removeEventListener('close', onNativeClose)
+      observer.disconnect()
+    }
+    const onOk = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      dialog.close()
       resolve(true)
     }
     const onCancel = () => {
-      dialog.classList.add('hidden')
-      dialog.classList.remove('flex')
-      okBtn.removeEventListener('click', onOk)
-      cancelBtn.removeEventListener('click', onCancel)
+      if (settled) return
+      settled = true
+      cleanup()
+      dialog.close()
       resolve(false)
     }
+    // Escキーなどネイティブな閉じ方をした場合もPromiseを確実に解決する(キャンセル扱い)。
+    // ブラウザによっては 'close' イベントが発火しないことがあるため、
+    // open属性の変化をMutationObserverでも監視して確実にフォールバックする。
+    const onNativeClose = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(false)
+    }
+    dialog.addEventListener('close', onNativeClose)
+    const observer = new MutationObserver(() => {
+      if (!dialog.open) onNativeClose()
+    })
+    observer.observe(dialog, { attributes: true, attributeFilter: ['open'] })
+
     okBtn.addEventListener('click', onOk)
     cancelBtn.addEventListener('click', onCancel)
   })
 }
 
-// ゲーム状態管理
-const gameState = {
-  round: 1,
-  turn: 'criminal', // 'criminal' or 'police'
-  gameMode: 'human', // 'human' or 'ai'
-  isGameStarted: false,
-  criminalPosition: null,
-  criminalTraces: [], // {x, y, round}の配列
-  helicopters: [
-    { id: 0, x: null, y: null },
-    { id: 1, x: null, y: null },
-    { id: 2, x: null, y: null }
-  ],
-  selectedHelicopter: null,
-  discoveredTraces: [],
-  gameOver: false,
-  xrayMode: false, // 犯人の透視モード
-  showPrediction: false, // 犯人の移動予測モード
-  phase: 'setup', // 'setup' or 'play'
-  helicoptersPlaced: 0,
-  helicoptersActioned: [] // 警察ターンで既に行動したヘリのID
-}
-
-// グリッドサイズ: 9x9 (ビル5x5 + 道路4x4が交互配置)
+// ---------------------------------------------------------------------------
+// 盤面定数
+// ---------------------------------------------------------------------------
 const GRID_SIZE = 9
-const BUILDING_POSITIONS = [] // ビルの座標リスト
-
-// ビルの座標を事前計算
+const BUILDING_POSITIONS = []
 for (let y = 0; y < GRID_SIZE; y++) {
   for (let x = 0; x < GRID_SIZE; x++) {
-    // 偶数行・偶数列 = ビル
-    if (x % 2 === 0 && y % 2 === 0) {
-      BUILDING_POSITIONS.push({ x, y })
-    }
+    if (x % 2 === 0 && y % 2 === 0) BUILDING_POSITIONS.push({ x, y })
   }
 }
 
-// 座標がビルかどうか判定
-function isBuilding(x, y) {
-  return x % 2 === 0 && y % 2 === 0
+function isBuilding(x, y) { return x % 2 === 0 && y % 2 === 0 }
+function isRoad(x, y) { return !isBuilding(x, y) }
+function isIntersection(x, y) { return x % 2 === 1 && y % 2 === 1 }
+
+// ---------------------------------------------------------------------------
+// アプリ状態
+// ---------------------------------------------------------------------------
+function freshGameState(mode) {
+  return {
+    round: 1,
+    turn: 'police',
+    gameMode: mode, // 'human' | 'ai' | 'online'
+    isGameStarted: true,
+    criminalPosition: null,
+    criminalTraces: [],
+    helicopters: [
+      { id: 0, x: null, y: null },
+      { id: 1, x: null, y: null },
+      { id: 2, x: null, y: null }
+    ],
+    selectedHelicopter: null,
+    discoveredTraces: [],
+    gameOver: false,
+    winner: null,
+    resultMessage: '',
+    xrayMode: false,
+    showPrediction: false,
+    phase: 'setup',
+    helicoptersPlaced: 0,
+    helicoptersActioned: []
+  }
 }
 
-// 座標が交差点(道路)かどうか判定
-function isRoad(x, y) {
-  return !isBuilding(x, y)
+let gameState = freshGameState('human')
+gameState.isGameStarted = false
+
+const online = {
+  roomId: null,
+  myRole: null,
+  hostRole: null,
+  unsubscribe: null
 }
 
-// 座標が交差点(奇数座標の道路)かどうか判定
-function isIntersection(x, y) {
-  return x % 2 === 1 && y % 2 === 1
+let currentScreen = 'title'
+
+function toArray(v) {
+  if (Array.isArray(v)) return v
+  if (v && typeof v === 'object') return Object.values(v)
+  return []
 }
 
-// 犯人の移動可能な場所を取得
+function normalizeState(raw) {
+  const base = freshGameState(raw.gameMode ?? 'online')
+  return {
+    ...base,
+    ...raw,
+    criminalTraces: toArray(raw.criminalTraces),
+    discoveredTraces: toArray(raw.discoveredTraces),
+    helicoptersActioned: toArray(raw.helicoptersActioned),
+    helicopters: (Array.isArray(raw.helicopters) ? raw.helicopters : base.helicopters).map((h, i) => ({
+      id: h?.id ?? i,
+      x: h?.x ?? null,
+      y: h?.y ?? null
+    })),
+    criminalPosition: raw.criminalPosition ?? null,
+    selectedHelicopter: raw.selectedHelicopter ?? null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 画面切り替え
+// ---------------------------------------------------------------------------
+function showScreen(name) {
+  currentScreen = name
+  document.getElementById('screen-title').hidden = name !== 'title'
+  document.getElementById('screen-lobby').hidden = name !== 'lobby'
+  document.getElementById('screen-game').hidden = name !== 'game'
+
+  document.getElementById('quit-game-btn').hidden = name !== 'game'
+  document.getElementById('hud-readout').hidden = !(name === 'game' && gameState.gameMode === 'online')
+}
+
+// ---------------------------------------------------------------------------
+// オンライン同期
+// ---------------------------------------------------------------------------
+function isOnline() {
+  return gameState.gameMode === 'online'
+}
+
+function activeRole() {
+  return gameState.phase === 'setup' ? 'police' : gameState.turn
+}
+
+function canAct() {
+  if (!isOnline()) return true
+  if (gameState.gameOver) return false
+  return online.myRole === activeRole()
+}
+
+function serializeForSync() {
+  const { xrayMode, showPrediction, ...rest } = gameState
+  return rest
+}
+
+function syncIfOnline() {
+  if (!isOnline() || !online.roomId) return
+  fb.pushState(online.roomId, serializeForSync()).catch((err) => {
+    addLog(`❌ 同期に失敗しました: ${err.message}`, 'error')
+  })
+}
+
+function applyRemoteState(remote) {
+  if (!remote) return
+  const normalized = normalizeState(remote)
+  const { xrayMode, showPrediction } = gameState // 個人的な表示切替はローカル専用、同期しない
+  gameState = { ...normalized, xrayMode, showPrediction }
+}
+
+function handleRoomUpdate(room) {
+  if (!room) return
+
+  if (room.status === 'waiting') {
+    return
+  }
+
+  applyRemoteState(room.state)
+
+  if (currentScreen !== 'game') {
+    showScreen('game')
+    initBoard()
+    document.getElementById('online-role-banner').hidden = false
+    document.getElementById('online-role-label').textContent =
+      online.myRole === 'police' ? 'あなたは警察です 🚁' : 'あなたは犯人です 🚗'
+  }
+
+  updateUI()
+
+  const modal = document.getElementById('game-over-modal')
+  if (gameState.gameOver && !modal.open) {
+    showGameOverModal(gameState.winner, gameState.resultMessage)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ルール系ヘルパー
+// ---------------------------------------------------------------------------
 function getValidCriminalMoves() {
-  if (!gameState.criminalPosition) {
-    return BUILDING_POSITIONS // 初回は全ビル
-  }
+  if (!gameState.criminalPosition) return BUILDING_POSITIONS
 
-  const adjacentBuildings = [
+  return [
     { x: gameState.criminalPosition.x - 2, y: gameState.criminalPosition.y },
     { x: gameState.criminalPosition.x + 2, y: gameState.criminalPosition.y },
     { x: gameState.criminalPosition.x, y: gameState.criminalPosition.y - 2 },
@@ -103,35 +229,20 @@ function getValidCriminalMoves() {
     isBuilding(pos.x, pos.y) &&
     !gameState.criminalTraces.some(t => t.x === pos.x && t.y === pos.y)
   )
-
-  return adjacentBuildings
 }
 
-// 警察の移動可能な場所を取得
 function getValidHelicopterMoves(heliId) {
   const heli = gameState.helicopters[heliId]
-  const moves = []
-
-  // 1マス飛ばし(距離2)の移動
-  const directions = [
-    { dx: 2, dy: 0 }, { dx: -2, dy: 0 },
-    { dx: 0, dy: 2 }, { dx: 0, dy: -2 }
-  ]
-
-  directions.forEach(dir => {
-    const nx = heli.x + dir.dx
-    const ny = heli.y + dir.dy
-    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE && isRoad(nx, ny)) {
-      // 他のヘリがいないかチェック
-      if (!gameState.helicopters.some(h => h.x === nx && h.y === ny)) {
-        moves.push({ x: nx, y: ny })
-      }
-    }
-  })
-  return moves
+  const directions = [{ dx: 2, dy: 0 }, { dx: -2, dy: 0 }, { dx: 0, dy: 2 }, { dx: 0, dy: -2 }]
+  return directions
+    .map(dir => ({ x: heli.x + dir.dx, y: heli.y + dir.dy }))
+    .filter(pos =>
+      pos.x >= 0 && pos.x < GRID_SIZE && pos.y >= 0 && pos.y < GRID_SIZE &&
+      isRoad(pos.x, pos.y) &&
+      !gameState.helicopters.some(h => h.x === pos.x && h.y === pos.y)
+    )
 }
 
-// 警察の調査可能なビルを取得
 function getSearchableBuildings(heliId) {
   const heli = gameState.helicopters[heliId]
   return [
@@ -139,181 +250,141 @@ function getSearchableBuildings(heliId) {
     { x: heli.x + 1, y: heli.y - 1 },
     { x: heli.x - 1, y: heli.y + 1 },
     { x: heli.x + 1, y: heli.y + 1 }
-  ].filter(pos =>
-    pos.x >= 0 && pos.x < GRID_SIZE &&
-    pos.y >= 0 && pos.y < GRID_SIZE &&
-    isBuilding(pos.x, pos.y)
-  )
+  ].filter(pos => pos.x >= 0 && pos.x < GRID_SIZE && pos.y >= 0 && pos.y < GRID_SIZE && isBuilding(pos.x, pos.y))
 }
 
-// ゲームボード初期化
+// ---------------------------------------------------------------------------
+// 盤面描画
+// ---------------------------------------------------------------------------
 function initBoard() {
   const board = document.getElementById('game-board')
   board.innerHTML = ''
+  board.className = 'board'
+  board.style.gridTemplateColumns = `repeat(${GRID_SIZE}, 1fr)`
+  board.style.gridTemplateRows = `repeat(${GRID_SIZE}, 1fr)`
 
-  // グリッドコンテナ
-  const gridContainer = document.createElement('div')
-  gridContainer.className = 'grid gap-0 w-full h-full'
-  gridContainer.style.gridTemplateColumns = `repeat(${GRID_SIZE}, 1fr)`
-  gridContainer.style.gridTemplateRows = `repeat(${GRID_SIZE}, 1fr)`
-
-  // グリッドセルを生成
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
-      const cell = document.createElement('div')
-      cell.className = 'relative border border-white/10'
-      cell.dataset.x = x
-      cell.dataset.y = y
-
       if (isBuilding(x, y)) {
-        // ビル(建物)のセル
-        cell.className += ' building-cell bg-gradient-to-br from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 transition-all cursor-pointer'
-        cell.innerHTML = `
-          <div class="w-full h-full flex items-center justify-center">
-            <div class="building-icon text-3xl opacity-50">🏢</div>
-          </div>
-        `
+        // ビルは他の要素を重ねないので実 <button> にできる。
+        const cell = document.createElement('button')
+        cell.type = 'button'
+        cell.dataset.x = x
+        cell.dataset.y = y
+        cell.className = 'cell cell--building'
+        cell.setAttribute('aria-label', `ビル (${x}, ${y})`)
+        cell.innerHTML = '<span class="cell__icon">🏢</span>'
         cell.addEventListener('click', () => handleBuildingClick(x, y))
+        board.appendChild(cell)
       } else {
-        // 道路のセル
-        cell.className += ' road-cell bg-slate-900/30 hover:bg-slate-800/40 transition-all'
+        // 道路はヘリコプター(実<button>)を重ねて描画するため、
+        // 入れ子<button>を避けて role="button" の<div>にする。
+        const cell = document.createElement('div')
+        cell.dataset.x = x
+        cell.dataset.y = y
+        cell.className = 'cell cell--road'
+        cell.setAttribute('role', 'button')
+        cell.setAttribute('tabindex', '0')
+        cell.setAttribute('aria-label', `道路 (${x}, ${y})`)
         cell.addEventListener('click', () => handleRoadClick(x, y))
+        cell.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          handleRoadClick(x, y)
+        })
+        board.appendChild(cell)
       }
-
-      gridContainer.appendChild(cell)
     }
   }
 
-  board.appendChild(gridContainer)
   renderHelicopters()
+  renderTraces()
   updateVisualFeedback()
 }
 
-// 視覚的フィードバック更新
 function updateVisualFeedback() {
-  // すべてのハイライトをクリア
-  document.querySelectorAll('.building-cell, .road-cell').forEach(cell => {
-    cell.classList.remove('valid-move', 'searchlight', 'xray-mode', 'xray-trace', 'valid-heli-move', 'valid-heli-placement')
+  document.querySelectorAll('.cell').forEach(cell => {
+    cell.classList.remove('is-move', 'is-search', 'is-xray', 'is-trace-ghost', 'is-heli-move', 'is-heli-slot')
   })
 
   if (!gameState.isGameStarted || gameState.gameOver) return
 
-  // 犯人ターン
-  if (gameState.turn === 'criminal' && gameState.gameMode === 'human') {
-    // 移動可能場所を強調 (ボタンがONの時のみ)
+  const myCriminalView = isOnline() ? online.myRole === 'criminal' : gameState.gameMode !== 'ai'
+
+  if (gameState.turn === 'criminal' && myCriminalView) {
     if (gameState.showPrediction) {
-      const validMoves = getValidCriminalMoves()
-      validMoves.forEach(pos => {
-        const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
-        if (cell) {
-          cell.classList.add('valid-move')
-        }
+      getValidCriminalMoves().forEach(pos => {
+        document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)?.classList.add('is-move')
       })
     }
 
-    // 透視モード (ボタンがONの時のみ)
     if (gameState.xrayMode) {
       gameState.criminalTraces.forEach(trace => {
         const cell = document.querySelector(`[data-x="${trace.x}"][data-y="${trace.y}"]`)
-        if (cell) {
-          if (gameState.criminalPosition && trace.x === gameState.criminalPosition.x && trace.y === gameState.criminalPosition.y) {
-            cell.classList.add('xray-mode')
-          } else {
-            cell.classList.add('xray-trace')
-          }
-        }
+        if (!cell) return
+        const isCurrent = gameState.criminalPosition &&
+          trace.x === gameState.criminalPosition.x && trace.y === gameState.criminalPosition.y
+        cell.classList.add(isCurrent ? 'is-xray' : 'is-trace-ghost')
       })
-
-      // 透視オン時は移動可能場所も表示
-      const validMoves2 = getValidCriminalMoves()
-      validMoves2.forEach(pos => {
-        const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
-        if (cell) {
-          cell.classList.add('valid-move')
-        }
+      getValidCriminalMoves().forEach(pos => {
+        document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)?.classList.add('is-move')
       })
     }
   }
 
-  // 警察ターン
   if (gameState.turn === 'police' && gameState.selectedHelicopter !== null) {
-    // サーチライト効果
-    const searchableBuildings = getSearchableBuildings(gameState.selectedHelicopter)
-    searchableBuildings.forEach(pos => {
-      const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
-      if (cell) {
-        cell.classList.add('searchlight')
-      }
+    getSearchableBuildings(gameState.selectedHelicopter).forEach(pos => {
+      document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)?.classList.add('is-search')
     })
-
-    // 移動可能場所の強調
-    const validHeliMoves = getValidHelicopterMoves(gameState.selectedHelicopter)
-    validHeliMoves.forEach(pos => {
-      const cell = document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)
-      if (cell) {
-        cell.classList.add('valid-heli-move')
-      }
+    getValidHelicopterMoves(gameState.selectedHelicopter).forEach(pos => {
+      document.querySelector(`[data-x="${pos.x}"][data-y="${pos.y}"]`)?.classList.add('is-heli-move')
     })
   }
 
-  // setupフェーズ: ヘリ配置可能場所を強調
   if (gameState.phase === 'setup' && gameState.turn === 'police') {
-    // 交差点(奇数座標)を強調
     for (let y = 1; y < GRID_SIZE; y += 2) {
       for (let x = 1; x < GRID_SIZE; x += 2) {
-        // 既にヘリが配置されていない場所のみ
         if (!gameState.helicopters.some(h => h.x === x && h.y === y)) {
-          const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
-          if (cell) {
-            cell.classList.add('valid-heli-placement')
-          }
+          document.querySelector(`[data-x="${x}"][data-y="${y}"]`)?.classList.add('is-heli-slot')
         }
       }
     }
   }
 }
 
-// ヘリコプター描画
 function renderHelicopters() {
-  // 既存のヘリコプターを削除
-  document.querySelectorAll('.helicopter').forEach(el => el.remove())
+  document.querySelectorAll('.heli').forEach(el => el.remove())
 
   gameState.helicopters.forEach(heli => {
     if (heli.x === null || heli.y === null) return
-
     const cell = document.querySelector(`[data-x="${heli.x}"][data-y="${heli.y}"]`)
-    if (cell) {
-      const heliEl = document.createElement('div')
-      heliEl.className = 'helicopter absolute inset-0 flex items-center justify-center z-10'
-      heliEl.dataset.heliId = heli.id
+    if (!cell) return
 
-      const isSelected = gameState.selectedHelicopter === heli.id
-      const isActioned = gameState.helicoptersActioned.includes(heli.id)
-      heliEl.innerHTML = `
-        <div class="text-4xl cursor-pointer transition-transform ${isSelected ? 'scale-125 drop-shadow-lg' : isActioned ? 'opacity-40 grayscale' : 'hover:scale-110'}">
-          🚁
-        </div>
-      `
+    const isSelected = gameState.selectedHelicopter === heli.id
+    const isActioned = gameState.helicoptersActioned.includes(heli.id)
 
-      // クリックで選択 (行動済みは不可)
-      heliEl.addEventListener('click', (e) => {
-        e.stopPropagation()
-        if (gameState.turn === 'police' && !gameState.gameOver && !isActioned) {
-          gameState.selectedHelicopter = heli.id
-          renderHelicopters()
-          updateVisualFeedback()
-          addLog(`🚁 ヘリ${heli.id + 1}を選択`, 'police')
-        } else if (isActioned) {
-          addLog(`❌ ヘリ${heli.id + 1}は今ターン既に行動済みです`, 'error')
-        }
-      })
-
-      cell.appendChild(heliEl)
-    }
+    const heliEl = document.createElement('button')
+    heliEl.type = 'button'
+    heliEl.className = `heli${isSelected ? ' is-selected' : ''}${isActioned ? ' is-done' : ''}`
+    heliEl.setAttribute('aria-label', `ヘリコプター${heli.id + 1}${isSelected ? '(選択中)' : ''}${isActioned ? '(行動済み)' : ''}`)
+    heliEl.textContent = '🚁'
+    heliEl.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (!canAct()) return
+      if (gameState.turn === 'police' && !gameState.gameOver && !isActioned) {
+        gameState.selectedHelicopter = heli.id
+        renderHelicopters()
+        updateVisualFeedback()
+        addLog(`🚁 ヘリ${heli.id + 1}を選択`, 'police')
+        syncIfOnline()
+      } else if (isActioned) {
+        addLog(`❌ ヘリ${heli.id + 1}は今ターン既に行動済みです`, 'error')
+      }
+    })
+    cell.appendChild(heliEl)
   })
 }
 
-// 次の未行動ヘリを自動選択する
 function selectNextHelicopter() {
   const nextHeli = gameState.helicopters.find(h => !gameState.helicoptersActioned.includes(h.id))
   if (nextHeli) {
@@ -321,10 +392,10 @@ function selectNextHelicopter() {
     renderHelicopters()
     updateVisualFeedback()
     addLog(`🚁 ヘリ${nextHeli.id + 1}を操作してください（移動または調査）`, 'police')
+    syncIfOnline()
   }
 }
 
-// 行動完了後の処理（次のヘリ選択またはターン終了）
 function onHelicopterActioned(heliId) {
   if (!gameState.helicoptersActioned.includes(heliId)) {
     gameState.helicoptersActioned.push(heliId)
@@ -335,62 +406,46 @@ function onHelicopterActioned(heliId) {
   } else {
     gameState.selectedHelicopter = null
     updateUI()
+    syncIfOnline()
     setTimeout(() => selectNextHelicopter(), 300)
   }
 }
 
-// 痕跡チップ描画
 function renderTraces() {
   document.querySelectorAll('.trace-chip').forEach(el => el.remove())
-
   gameState.discoveredTraces.forEach(trace => {
     const cell = document.querySelector(`[data-x="${trace.x}"][data-y="${trace.y}"]`)
-    if (cell) {
-      const traceEl = document.createElement('div')
-      traceEl.className = 'trace-chip absolute top-1 right-1 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shadow-lg z-20'
-
-      // ラウンドに応じた色
-      if (trace.round === 1) {
-        traceEl.className += ' bg-yellow-400 text-black'
-      } else if (trace.round === 6) {
-        traceEl.className += ' bg-red-500 text-white'
-      } else {
-        traceEl.className += ' bg-blue-500 text-white'
-      }
-
-      traceEl.textContent = '!'
-      cell.appendChild(traceEl)
-    }
+    if (!cell) return
+    const chip = document.createElement('div')
+    chip.className = 'trace-chip'
+    chip.textContent = String(trace.round)
+    cell.appendChild(chip)
   })
 }
 
-// ビルクリック処理
+// ---------------------------------------------------------------------------
+// クリック処理
+// ---------------------------------------------------------------------------
 function handleBuildingClick(x, y) {
-  if (!gameState.isGameStarted || gameState.gameOver) return
+  if (!gameState.isGameStarted || gameState.gameOver || !canAct()) return
 
-  if (gameState.turn === 'criminal' && gameState.gameMode === 'human') {
-    // 犯人の移動
+  const criminalIsHumanControlled = isOnline() ? online.myRole === 'criminal' : gameState.gameMode === 'human'
+  if (gameState.turn === 'criminal' && criminalIsHumanControlled) {
     moveCriminalToBuilding(x, y)
   } else if (gameState.turn === 'police') {
-    // 警察の調査
     searchBuilding(x, y)
   }
 }
 
-// 道路クリック処理
 function handleRoadClick(x, y) {
-  if (!gameState.isGameStarted || gameState.gameOver) return
+  if (!gameState.isGameStarted || gameState.gameOver || !canAct()) return
 
   if (gameState.phase === 'setup' && gameState.turn === 'police') {
-    // ヘリコプターの初期配置
     if (gameState.helicoptersPlaced < 3) {
-      // 交差点(奇数座標)のみ配置可能
       if (!isIntersection(x, y)) {
         addLog('❌ ヘリコプターは交差点にのみ配置できます', 'error')
         return
       }
-
-      // 既に他のヘリがいないかチェック
       if (gameState.helicopters.some(h => h.x === x && h.y === y)) {
         addLog('❌ すでにヘリコプターが配置されています', 'error')
         return
@@ -403,9 +458,9 @@ function handleRoadClick(x, y) {
 
       addLog(`🚁 ヘリ${gameState.helicoptersPlaced}を配置しました`, 'police')
       renderHelicopters()
+      syncIfOnline()
 
       if (gameState.helicoptersPlaced === 3) {
-        // 3機配置完了→確認ダイアログ
         addLog('❓ 3機配置完了。この配置でよいか確認してください', 'police')
         showConfirm({
           icon: '🚁',
@@ -417,21 +472,21 @@ function handleRoadClick(x, y) {
           if (confirmed) {
             gameState.phase = 'play'
             addLog('✅ 配置完了。犯人のターンから開始します', 'success')
+            syncIfOnline()
             setTimeout(() => {
               gameState.turn = 'criminal'
               updateUI()
-              if (gameState.gameMode === 'ai') {
-                aiCriminalMove()
-              }
+              syncIfOnline()
+              if (gameState.gameMode === 'ai') aiCriminalMove()
             }, 500)
           } else {
-            // やり直し: 全ヘリをリセット
             gameState.helicoptersPlaced = 0
             gameState.helicopters.forEach(h => { h.x = null; h.y = null })
             addLog('🔄 配置をリセットしました。再度配置してください', 'police')
             renderHelicopters()
             updateUI()
             updateVisualFeedback()
+            syncIfOnline()
           }
         })
       } else {
@@ -448,7 +503,6 @@ function handleRoadClick(x, y) {
   }
 
   if (gameState.turn === 'police' && gameState.selectedHelicopter !== null) {
-    // 選択中のヘリコプターを移動
     const heli = gameState.helicopters[gameState.selectedHelicopter]
     const dx = Math.abs(x - heli.x)
     const dy = Math.abs(y - heli.y)
@@ -458,12 +512,11 @@ function handleRoadClick(x, y) {
         addLog('❌ 他のヘリコプターがいます', 'error')
         return
       }
-
       heli.x = x
       heli.y = y
       renderHelicopters()
       addLog(`🚁 ヘリ${heli.id + 1}が移動しました`, 'police')
-
+      syncIfOnline()
       setTimeout(() => onHelicopterActioned(heli.id), 500)
     } else {
       addLog('❌ 1マス飛ばして移動する必要があります', 'error')
@@ -471,7 +524,6 @@ function handleRoadClick(x, y) {
   }
 }
 
-// 犯人のビルへの移動
 function moveCriminalToBuilding(x, y) {
   if (!isBuilding(x, y)) {
     addLog('❌ ビルにのみ移動できます', 'error')
@@ -479,9 +531,8 @@ function moveCriminalToBuilding(x, y) {
   }
 
   if (!gameState.criminalPosition) {
-    // 初回配置: クリックしたビルをハイライトして確認
     const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
-    if (cell) cell.classList.add('xray-mode')
+    cell?.classList.add('is-xray')
     showConfirm({
       icon: '🚗',
       title: '犯人の初期配置',
@@ -489,7 +540,7 @@ function moveCriminalToBuilding(x, y) {
       okLabel: '✅ ここに隠れる',
       cancelLabel: '❌ やり直す'
     }).then(confirmed => {
-      if (cell) cell.classList.remove('xray-mode')
+      cell?.classList.remove('is-xray')
       if (confirmed) {
         gameState.criminalPosition = { x, y }
         gameState.criminalTraces.push({ x, y, round: gameState.round })
@@ -500,27 +551,23 @@ function moveCriminalToBuilding(x, y) {
     return
   }
 
-  // 行き詰まりチェック（人間プレイ時）
   const validMoves = getValidCriminalMoves()
   if (validMoves.length === 0) {
     endGame('police', '犯人が包囲されました!')
     return
   }
 
-  // 隣接チェック
   const dx = Math.abs(x - gameState.criminalPosition.x)
   const dy = Math.abs(y - gameState.criminalPosition.y)
 
   if ((dx === 2 && dy === 0) || (dx === 0 && dy === 2)) {
-    // 既に痕跡がある場所には移動できない
     if (gameState.criminalTraces.some(t => t.x === x && t.y === y)) {
       addLog('❌ 移動できません(痕跡あり)', 'error')
       return
     }
 
-    // 移動先を強調しながら確認
     const cell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
-    if (cell) cell.classList.add('xray-mode')
+    cell?.classList.add('is-xray')
     showConfirm({
       icon: '🚗',
       title: '移動の確認',
@@ -528,7 +575,7 @@ function moveCriminalToBuilding(x, y) {
       okLabel: '✅ ここに移動',
       cancelLabel: '❌ キャンセル'
     }).then(confirmed => {
-      if (cell) cell.classList.remove('xray-mode')
+      cell?.classList.remove('is-xray')
       if (confirmed) {
         gameState.criminalPosition = { x, y }
         gameState.criminalTraces.push({ x, y, round: gameState.round })
@@ -541,10 +588,8 @@ function moveCriminalToBuilding(x, y) {
   }
 }
 
-// AIの犯人移動
 function aiCriminalMove() {
   if (!gameState.criminalPosition) {
-    // 初回:ランダムな位置に配置
     const randomBuilding = BUILDING_POSITIONS[Math.floor(Math.random() * BUILDING_POSITIONS.length)]
     gameState.criminalPosition = { x: randomBuilding.x, y: randomBuilding.y }
     gameState.criminalTraces.push({ ...gameState.criminalPosition, round: gameState.round })
@@ -553,9 +598,7 @@ function aiCriminalMove() {
     return
   }
 
-  // 移動可能なビルを取得（getValidCriminalMovesを再利用）
   const adjacentBuildings = getValidCriminalMoves()
-
   if (adjacentBuildings.length === 0) {
     endGame('police', '犯人が包囲されました!')
     return
@@ -568,38 +611,28 @@ function aiCriminalMove() {
   endTurn()
 }
 
-// ビル調査
 function searchBuilding(x, y) {
   if (!isBuilding(x, y)) {
     addLog('❌ ビルのみ調査できます', 'error')
     return
   }
-
   if (gameState.selectedHelicopter === null) {
     addLog('❌ ヘリコプターを選択してください', 'error')
     return
   }
 
   const heli = gameState.helicopters[gameState.selectedHelicopter]
-
-  // 隣接4マスのビルかチェック
   const adjacentBuildings = [
-    { x: heli.x - 1, y: heli.y - 1 },
-    { x: heli.x + 1, y: heli.y - 1 },
-    { x: heli.x - 1, y: heli.y + 1 },
-    { x: heli.x + 1, y: heli.y + 1 }
+    { x: heli.x - 1, y: heli.y - 1 }, { x: heli.x + 1, y: heli.y - 1 },
+    { x: heli.x - 1, y: heli.y + 1 }, { x: heli.x + 1, y: heli.y + 1 }
   ]
-
-  const isAdjacent = adjacentBuildings.some(b => b.x === x && b.y === y)
-
-  if (!isAdjacent) {
+  if (!adjacentBuildings.some(b => b.x === x && b.y === y)) {
     addLog('❌ 隣接するビルのみ調査できます', 'error')
     return
   }
 
-  // 確認ダイアログを表示してから調査実行
   const searchCell = document.querySelector(`[data-x="${x}"][data-y="${y}"]`)
-  if (searchCell) searchCell.classList.add('searchlight')
+  searchCell?.classList.add('is-search')
   showConfirm({
     icon: '🔍',
     title: 'ビル調査の確認',
@@ -607,18 +640,14 @@ function searchBuilding(x, y) {
     okLabel: '✅ 調査する',
     cancelLabel: '❌ キャンセル'
   }).then(confirmed => {
-    if (searchCell) searchCell.classList.remove('searchlight')
+    searchCell?.classList.remove('is-search')
     if (!confirmed) return
 
-    // 犯人の車を発見
-    if (gameState.criminalPosition &&
-      gameState.criminalPosition.x === x &&
-      gameState.criminalPosition.y === y) {
+    if (gameState.criminalPosition && gameState.criminalPosition.x === x && gameState.criminalPosition.y === y) {
       endGame('police', '犯人の車を発見しました!')
       return
     }
 
-    // 痕跡を発見
     const trace = gameState.criminalTraces.find(t => t.x === x && t.y === y)
     if (trace && !gameState.discoveredTraces.some(d => d.x === x && d.y === y)) {
       gameState.discoveredTraces.push(trace)
@@ -630,30 +659,27 @@ function searchBuilding(x, y) {
     }
 
     const heliId = gameState.selectedHelicopter
+    syncIfOnline()
     setTimeout(() => onHelicopterActioned(heliId), 500)
   })
 }
 
-// ターン終了
 function endTurn() {
   if (gameState.turn === 'criminal') {
-    // 犯人ターン終了時に透視モードを強制OFF
     gameState.xrayMode = false
     const xrayBtn = document.getElementById('xray-btn')
-    if (xrayBtn) {
-      xrayBtn.classList.remove('bg-yellow-500')
-      xrayBtn.classList.add('bg-slate-700')
-    }
+    xrayBtn?.setAttribute('aria-pressed', 'false')
     gameState.turn = 'police'
     gameState.selectedHelicopter = null
     gameState.helicoptersActioned = []
     updateUI()
     addLog('🚁 警察のターンです。ヘリ1から順番に操作してください', 'police')
+    syncIfOnline()
     setTimeout(() => selectNextHelicopter(), 300)
   } else {
     gameState.turn = 'criminal'
     gameState.round++
-    gameState.helicoptersActioned = [] // リセット
+    gameState.helicoptersActioned = []
 
     if (gameState.round > 11) {
       endGame('criminal', '犯人が逃げ切りました!')
@@ -662,6 +688,7 @@ function endTurn() {
 
     updateUI()
     addLog(`--- ラウンド ${gameState.round} ---`, 'info')
+    syncIfOnline()
 
     if (gameState.gameMode === 'ai') {
       setTimeout(() => aiCriminalMove(), 1000)
@@ -669,18 +696,16 @@ function endTurn() {
   }
 }
 
+// ---------------------------------------------------------------------------
 // UI更新
+// ---------------------------------------------------------------------------
 function updateUI() {
   document.getElementById('round-display').textContent = `${gameState.round}/11`
-  document.getElementById('turn-display').textContent = gameState.turn === 'criminal' ? '犯人' : '警察'
 
-  // 背景色をターンに応じて変更
-  const body = document.body
-  if (gameState.turn === 'police') {
-    body.className = 'bg-gradient-to-br from-blue-900 via-slate-900 to-blue-800 min-h-screen transition-all duration-1000'
-  } else {
-    body.className = 'bg-gradient-to-br from-orange-900 via-slate-900 to-orange-800 min-h-screen transition-all duration-1000'
-  }
+  const turnDisplay = document.getElementById('turn-display')
+  turnDisplay.textContent = gameState.turn === 'criminal' ? '犯人' : '警察'
+  turnDisplay.classList.toggle('is-criminal', gameState.turn === 'criminal')
+  turnDisplay.classList.toggle('is-police', gameState.turn === 'police')
 
   let statusText = ''
   if (gameState.phase === 'setup') {
@@ -695,144 +720,232 @@ function updateUI() {
   const xrayBtn = document.getElementById('xray-btn')
   const predictBtn = document.getElementById('predict-btn')
 
-  if (gameState.turn === 'criminal' && gameState.gameMode === 'human') {
-    criminalPanel.classList.remove('hidden')
-    policePanel.classList.add('hidden')
-    if (xrayBtn) xrayBtn.classList.remove('hidden')
-    if (predictBtn) predictBtn.classList.remove('hidden')
+  if (isOnline()) {
+    const iAmActive = online.myRole === activeRole()
+    criminalPanel.hidden = !(iAmActive && gameState.turn === 'criminal')
+    policePanel.hidden = !(iAmActive && gameState.turn === 'police')
+    xrayBtn.hidden = criminalPanel.hidden
+    predictBtn.hidden = criminalPanel.hidden
+
+    const turnLabel = document.getElementById('online-turn-label')
+    if (turnLabel) turnLabel.textContent = iAmActive ? 'あなたの番です' : '相手の番です（待機中）'
+  } else if (gameState.turn === 'criminal' && gameState.gameMode === 'human') {
+    criminalPanel.hidden = false
+    policePanel.hidden = true
+    xrayBtn.hidden = false
+    predictBtn.hidden = false
   } else if (gameState.turn === 'police') {
-    criminalPanel.classList.add('hidden')
-    policePanel.classList.remove('hidden')
-    if (xrayBtn) xrayBtn.classList.add('hidden')
-    if (predictBtn) predictBtn.classList.add('hidden')
+    criminalPanel.hidden = true
+    policePanel.hidden = false
+    xrayBtn.hidden = true
+    predictBtn.hidden = true
   } else {
-    criminalPanel.classList.add('hidden')
-    policePanel.classList.add('hidden')
-    if (xrayBtn) xrayBtn.classList.add('hidden')
-    if (predictBtn) predictBtn.classList.add('hidden')
+    criminalPanel.hidden = true
+    policePanel.hidden = true
+    xrayBtn.hidden = true
+    predictBtn.hidden = true
   }
 
+  document.getElementById('traces-found').textContent = gameState.discoveredTraces.length
+
   renderHelicopters()
+  renderTraces()
   updateVisualFeedback()
 }
 
-// ゲーム終了
-function endGame(winner, message) {
-  gameState.gameOver = true
-  updateUI()
+function showGameOverModal(winner, message) {
   document.getElementById('winner-text').textContent = winner === 'police' ? '🚁 警察の勝利!' : '🚗 犯人の勝利!'
   document.getElementById('game-over-message').textContent = message
-  document.getElementById('game-over-modal').classList.remove('hidden')
-  document.getElementById('game-over-modal').classList.add('flex')
-  addLog(`🎉 ゲーム終了: ${message}`, 'success')
+  document.getElementById('restart-btn').hidden = isOnline()
+  const modal = document.getElementById('game-over-modal')
+  if (!modal.open) modal.showModal()
 }
 
-// ログ追加
+function endGame(winner, message) {
+  gameState.gameOver = true
+  gameState.winner = winner
+  gameState.resultMessage = message
+  updateUI()
+  showGameOverModal(winner, message)
+  addLog(`🎉 ゲーム終了: ${message}`, 'success')
+  syncIfOnline()
+}
+
 function addLog(message, type = 'info') {
   const log = document.getElementById('game-log')
   const entry = document.createElement('div')
-
-  const colors = {
-    info: 'text-gray-300',
-    success: 'text-green-400',
-    error: 'text-red-400',
-    criminal: 'text-red-300',
-    police: 'text-blue-300'
-  }
-
-  entry.className = colors[type] || colors.info
+  entry.className = `log-entry log-entry--${type}`
   entry.textContent = message
   log.appendChild(entry)
   log.scrollTop = log.scrollHeight
 }
 
-// イベントリスナー
-document.getElementById('start-game-btn').addEventListener('click', () => {
-  gameState.gameMode = document.getElementById('game-mode').value
-  gameState.isGameStarted = true
-  gameState.round = 1
-  gameState.turn = 'police' // 最初は警察の配置から
-  gameState.phase = 'setup'
-  gameState.helicoptersPlaced = 0
-  gameState.criminalPosition = null
-  gameState.criminalTraces = []
-  gameState.discoveredTraces = []
-  gameState.gameOver = false
-  gameState.selectedHelicopter = null
-  gameState.helicoptersActioned = []
-  gameState.xrayMode = false
-  gameState.showPrediction = false
+// ---------------------------------------------------------------------------
+// ローカル対戦 (human / ai) の開始
+// ---------------------------------------------------------------------------
+function startLocalGame(mode) {
+  gameState = freshGameState(mode)
+  online.roomId = null
+  online.myRole = null
 
-  // ヘリの位置リセット
-  gameState.helicopters.forEach(h => {
-    h.x = null
-    h.y = null
-  })
-
+  document.getElementById('online-role-banner').hidden = true
   document.getElementById('game-log').innerHTML = ''
-  document.getElementById('traces-found').textContent = '0'
 
-  // ゲーム開始ボタンを非表示、終了ボタンを表示
-  document.getElementById('start-game-btn').classList.add('hidden')
-  document.getElementById('quit-game-btn').classList.remove('hidden')
-
+  showScreen('game')
   initBoard()
   updateUI()
   addLog('🎮 ゲーム開始!', 'success')
   addLog('🚁 警察のターン: 道路をクリックしてヘリコプターを3台配置してください', 'police')
-})
+}
 
-// ゲーム終了ボタン
-document.getElementById('quit-game-btn').addEventListener('click', () => {
-  showConfirm({
-    icon: '🚪',
-    title: 'ゲームを終了しますか？',
-    message: '現在のゲームを終了してタイトルに戻ります。\n進行状況は失われます。',
-    okLabel: '🚪 終了する',
-    cancelLabel: '▶️ 続ける'
-  }).then(confirmed => {
-    if (confirmed) {
-      gameState.isGameStarted = false
-      gameState.gameOver = true
-      gameState.turn = 'police' // 背景色を青系（初期状態）に戻す
-      document.getElementById('start-game-btn').classList.remove('hidden')
-      document.getElementById('quit-game-btn').classList.add('hidden')
-      addLog('🚪 ゲームを終了しました', 'info')
-      updateUI()
+// ---------------------------------------------------------------------------
+// オンライン対戦: ロビー
+// ---------------------------------------------------------------------------
+let selectedHostRole = 'police'
+
+function initLobbyUI() {
+  const rolePicker = document.getElementById('role-picker')
+  rolePicker.querySelectorAll('.role-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedHostRole = btn.dataset.role
+      rolePicker.querySelectorAll('.role-btn').forEach(b => b.setAttribute('aria-pressed', String(b === btn)))
+    })
+  })
+
+  document.getElementById('create-room-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('create-room-btn')
+    btn.disabled = true
+    try {
+      const initialState = freshGameState('online')
+      const { roomId, role } = await fb.createRoom(selectedHostRole, initialState)
+      online.roomId = roomId
+      online.myRole = role
+      online.hostRole = selectedHostRole
+      gameState = initialState
+
+      document.getElementById('create-room-result').hidden = false
+      document.getElementById('room-code-value').textContent = roomId
+      document.getElementById('lobby-status-host').textContent = '対戦相手の参加を待っています…'
+
+      online.unsubscribe?.()
+      online.unsubscribe = fb.subscribeRoom(roomId, handleRoomUpdate)
+    } catch (err) {
+      alert(`部屋の作成に失敗しました: ${err.message}`)
+    } finally {
+      btn.disabled = false
     }
   })
-})
 
-// 透視モードボタン
-const xrayBtn = document.getElementById('xray-btn')
-if (xrayBtn) {
+  document.getElementById('join-room-btn').addEventListener('click', async () => {
+    const input = document.getElementById('join-room-input')
+    const errorEl = document.getElementById('join-room-error')
+    errorEl.hidden = true
+    const code = input.value.trim()
+
+    if (!/^\d{6}$/.test(code)) {
+      errorEl.textContent = '6桁の数字コードを入力してください。'
+      errorEl.hidden = false
+      return
+    }
+
+    const btn = document.getElementById('join-room-btn')
+    btn.disabled = true
+    try {
+      const { roomId, role } = await fb.joinRoom(code)
+      online.roomId = roomId
+      online.myRole = role
+
+      online.unsubscribe?.()
+      online.unsubscribe = fb.subscribeRoom(roomId, handleRoomUpdate)
+    } catch (err) {
+      errorEl.textContent = err.message
+      errorEl.hidden = false
+    } finally {
+      btn.disabled = false
+    }
+  })
+
+  document.getElementById('lobby-back-btn').addEventListener('click', () => {
+    cleanupOnlineSession()
+    showScreen('title')
+  })
+}
+
+function cleanupOnlineSession() {
+  online.unsubscribe?.()
+  online.unsubscribe = null
+  if (online.roomId && online.myRole) {
+    fb.leaveRoom(online.roomId, online.myRole)
+  }
+  online.roomId = null
+  online.myRole = null
+  online.hostRole = null
+  document.getElementById('create-room-result').hidden = true
+  document.getElementById('join-room-input').value = ''
+}
+
+// ---------------------------------------------------------------------------
+// 起動時の配線
+// ---------------------------------------------------------------------------
+function init() {
+  document.querySelectorAll('.mode-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const mode = card.dataset.mode
+      if (mode === 'online') {
+        showScreen('lobby')
+      } else {
+        startLocalGame(mode)
+      }
+    })
+  })
+
+  initLobbyUI()
+
+  document.getElementById('quit-game-btn').addEventListener('click', () => {
+    showConfirm({
+      icon: '🚪',
+      title: 'ゲームを終了しますか？',
+      message: '現在のゲームを終了してタイトルに戻ります。\n進行状況は失われます。',
+      okLabel: '🚪 終了する',
+      cancelLabel: '▶️ 続ける'
+    }).then(confirmed => {
+      if (!confirmed) return
+      cleanupOnlineSession()
+      const modal = document.getElementById('game-over-modal')
+      if (modal.open) modal.close()
+      addLog('🚪 ゲームを終了しました', 'info')
+      showScreen('title')
+    })
+  })
+
+  const xrayBtn = document.getElementById('xray-btn')
   xrayBtn.addEventListener('click', () => {
     gameState.xrayMode = !gameState.xrayMode
-    xrayBtn.classList.toggle('bg-yellow-500', gameState.xrayMode)
-    xrayBtn.classList.toggle('bg-slate-700', !gameState.xrayMode)
+    xrayBtn.setAttribute('aria-pressed', String(gameState.xrayMode))
     updateVisualFeedback()
     addLog(gameState.xrayMode ? '👁️ 透視モードON' : '👁️ 透視モードOFF', 'criminal')
   })
-}
 
-// 予測モードボタン
-const predictBtn = document.getElementById('predict-btn')
-if (predictBtn) {
+  const predictBtn = document.getElementById('predict-btn')
   predictBtn.addEventListener('click', () => {
     gameState.showPrediction = !gameState.showPrediction
-    predictBtn.classList.toggle('bg-green-500', gameState.showPrediction)
-    predictBtn.classList.toggle('bg-slate-700', !gameState.showPrediction)
+    predictBtn.setAttribute('aria-pressed', String(gameState.showPrediction))
     updateVisualFeedback()
     addLog(gameState.showPrediction ? '💡 予測モードON' : '💡 予測モードOFF', 'criminal')
   })
+
+  document.getElementById('restart-btn').addEventListener('click', () => {
+    document.getElementById('game-over-modal').close()
+    startLocalGame(gameState.gameMode)
+  })
+
+  document.getElementById('modal-title-btn').addEventListener('click', () => {
+    document.getElementById('game-over-modal').close()
+    cleanupOnlineSession()
+    showScreen('title')
+  })
+
+  showScreen('title')
 }
 
-// リスタート
-document.getElementById('restart-btn').addEventListener('click', () => {
-  document.getElementById('game-over-modal').classList.add('hidden')
-  document.getElementById('game-over-modal').classList.remove('flex')
-  document.getElementById('start-game-btn').click()
-})
-
-// 初期ボード表示
-initBoard()
+init()

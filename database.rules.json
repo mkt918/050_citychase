@@ -1,0 +1,11 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        ".validate": "$roomId.matches(/^[0-9]{6}$/)"
+      }
+    }
+  }
+}
